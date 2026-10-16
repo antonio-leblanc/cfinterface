@@ -1,3 +1,5 @@
+import os
+import tempfile
 import warnings
 from io import StringIO
 from typing import IO
@@ -304,3 +306,39 @@ def test_blockfile_validate_unknown_version():
     f = VersionedBlockFile.read(filedata)
     result = f.validate(version="v0")
     assert result.matched is False
+
+
+def test_blockfile_read_encoding_fallback_no_duplication():
+    """Verify no data duplication when first encoding fails mid-file.
+
+    The non-UTF-8 byte sits past the first 8 KB, so UTF-8 decoding only
+    fails after some blocks were already read. The fallback to Latin-1
+    must not carry over the partially read data from the failed attempt.
+    """
+    block = "\n".join(
+        [DummyBlock.BEGIN_PATTERN, "Hello, world!", DummyBlock.END_PATTERN]
+    )
+    accented = "\n".join(
+        [DummyBlock.BEGIN_PATTERN, "with accênt!", DummyBlock.END_PATTERN]
+    )
+    content = (block + "\n") * 500 + accented + "\n"
+
+    class FallbackFile(BlockFile):
+        BLOCKS = [DummyBlock]
+        ENCODING = ["utf-8", "latin-1"]
+
+    class Latin1File(BlockFile):
+        BLOCKS = [DummyBlock]
+        ENCODING = "latin-1"
+
+    with tempfile.NamedTemporaryFile(
+        mode="wb", suffix=".txt", delete=False
+    ) as f:
+        f.write(content.encode("latin-1"))
+        tmppath = f.name
+    try:
+        result = FallbackFile.read(tmppath)
+        expected = Latin1File.read(tmppath)
+        assert len(result.data) == len(expected.data)
+    finally:
+        os.unlink(tmppath)

@@ -1,3 +1,5 @@
+import os
+import tempfile
 import warnings
 from io import StringIO
 from typing import IO
@@ -244,3 +246,33 @@ def test_sectionfile_validate_unknown_version():
     f = VersionedSectionFile.read(data + "\n")
     result = f.validate(version="v0")
     assert result.matched is False
+
+
+def test_sectionfile_read_encoding_fallback_no_duplication():
+    """Verify no data duplication when first encoding fails mid-file.
+
+    The non-UTF-8 byte sits past the first 8 KB, so UTF-8 decoding only
+    fails after some sections were already read. The fallback to Latin-1
+    must not carry over the partially read data from the failed attempt.
+    """
+    content = "Hello, world!\n" * 1000 + "with accênt!\n"
+
+    class FallbackFile(SectionFile):
+        SECTIONS = [DummySection]
+        ENCODING = ["utf-8", "latin-1"]
+
+    class Latin1File(SectionFile):
+        SECTIONS = [DummySection]
+        ENCODING = "latin-1"
+
+    with tempfile.NamedTemporaryFile(
+        mode="wb", suffix=".txt", delete=False
+    ) as f:
+        f.write(content.encode("latin-1"))
+        tmppath = f.name
+    try:
+        result = FallbackFile.read(tmppath)
+        expected = Latin1File.read(tmppath)
+        assert len(result.data) == len(expected.data)
+    finally:
+        os.unlink(tmppath)
